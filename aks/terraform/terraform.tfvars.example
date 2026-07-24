@@ -1,0 +1,13 @@
+location                 = "westeurope"
+prefix                   = "teleport-azure"
+aks_node_count           = 1
+aks_vm_size              = "Standard_B2s"
+teleport_proxy_address   = "teleport.example.com:443"
+teleport_app_name        = "azure-cli"
+teleport_join_token_file = ".join-token"
+teleport_binary_path     = "../teleport"
+
+# Optional overrides:
+# teleport_binary_blob_name = "teleport"
+# teleport_image            = "public.ecr.aws/gravitational/teleport-distroless:17"
+# azure_cli_image           = "mcr.microsoft.com/azure-cli:latest"
