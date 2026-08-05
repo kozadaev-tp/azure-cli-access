@@ -23,13 +23,15 @@ az account show --query id -o tsv                 # sanity check
 `make` reads the active subscription via `az account show`, so make sure the
 right one is selected before generating files.
 
-## 2. Render the join token
+## 2. Create the Teleport join resource
 
 ```sh
-make join
+make join/apply
 ```
 
-This produces `join.yaml` from `join.yaml.tpl` with the live subscription ID.
+This produces `join.yaml` from `join.yaml.tpl` with the live subscription ID and
+applies it with `tctl`. Run `make join` instead when you only want to render the
+file.
 
 ## 3. Generate the VM SSH key
 
@@ -46,19 +48,26 @@ public key from `../id_rsa_azure.pub` by default; override
 ## 4. Provision Azure resources
 
 ```sh
-cd terraform
-cp terraform.tfvars.example terraform.tfvars   # edit values for your env
-vim terraform.tfvars
+cp terraform/terraform.tfvars.example terraform/terraform.tfvars
+vim terraform/terraform.tfvars
 ```
 
 At minimum set `teleport_proxy_address` and `teleport_binary_path`. The binary
 path is read by Terraform, so relative paths are resolved from the `terraform/`
-directory. Then:
+directory. Then provision everything in dependency order:
 
 ```sh
-terraform init
-terraform plan  -var-file=terraform.tfvars
-terraform apply -var-file=terraform.tfvars
+make vm/create
+```
+
+`make vm/create` applies the Teleport join resource, initializes Terraform,
+generates the SSH key if needed, validates the Teleport binary path, and applies
+Terraform. To inspect the plan or run each Terraform operation separately:
+
+```sh
+make tf/init
+make tf/plan
+make tf/apply
 ```
 
 Apply creates the resource group, user-assigned managed identity, role
@@ -67,12 +76,6 @@ Blob Storage, and creates a Linux VM that installs Azure CLI, downloads the
 binary with `az storage blob download`, and runs that binary as the
 Teleport Application Service. The VM joins the cluster using the Azure
 delegated join method — no static token needs to be placed on the host.
-
-When done, return to the parent directory:
-
-```sh
-cd ..
-```
 
 ## 5. Render the Teleport role
 
@@ -91,17 +94,25 @@ After rebuilding Teleport locally, re-upload the binary and force a fresh VM so
 cloud-init downloads and runs it again:
 
 ```sh
-make vm/recreate-binary TELEPORT_BINARY_PATH=../teleport
+make agent/rebuild TELEPORT_BINARY_PATH=../teleport
 ```
 
 If `teleport_binary_path` is already set in `terraform/terraform.tfvars`, you can
 omit `TELEPORT_BINARY_PATH`. Add `TF_APPLY_ARGS=-auto-approve` when you want a
 non-interactive apply.
 
-## 6. Create the Teleport resources
+Inspect or manage the resulting VM and Teleport service with:
 
 ```sh
-tctl create -f join.yaml
+make vm/status
+make vm/logs
+make vm/restart
+make vm/ssh
+```
+
+## 6. Create the Teleport role
+
+```sh
 tctl create -f role.yaml
 ```
 
@@ -142,8 +153,10 @@ terraform -chdir=terraform output storage_container_name
 ## Tear-down
 
 ```sh
-terraform -chdir=terraform destroy -var-file=terraform/terraform.tfvars
+make tf/destroy
 tctl rm role/azure-cli-access
 tctl rm token/azure-token
 make clean-generated
 ```
+
+Run `make targets` to list all available helpers.
