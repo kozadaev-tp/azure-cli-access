@@ -1,0 +1,46 @@
+kind: role
+version: v7
+metadata:
+  name: azure-app-registration-issuer
+spec:
+  allow:
+    workload_identity_labels:
+      purpose:
+        - azure-app-registration-poc
+    rules:
+      - resources:
+          - workload_identity
+        verbs:
+          - list
+          - read
+---
+kind: workload_identity
+version: v1
+metadata:
+  name: azure-app-registration
+  labels:
+    purpose: azure-app-registration-poc
+spec:
+  spiffe:
+    id: /svc/azure-app-registration
+---
+kind: bot
+version: v1
+metadata:
+  name: azure-app-registration
+spec:
+  roles:
+    - azure-app-registration-issuer
+---
+kind: token
+version: v2
+metadata:
+  name: azure-app-registration-bot
+spec:
+  roles:
+    - Bot
+  bot_name: azure-app-registration
+  join_method: azure
+  azure:
+    allow:
+      - subscription: ${SUBSCRIPTION_ID}
