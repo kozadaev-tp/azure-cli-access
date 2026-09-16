@@ -1,21 +1,5 @@
-data "azurerm_subscription" "current" {}
 data "azurerm_client_config" "current" {}
 data "azuread_client_config" "current" {}
-
-moved {
-  from = azurerm_role_assignment.reader
-  to   = azurerm_role_assignment.tbot_vm_reader
-}
-
-moved {
-  from = azurerm_storage_container.teleport_binary
-  to   = azurerm_storage_container.tbot_binary
-}
-
-moved {
-  from = azurerm_storage_blob.teleport_binary
-  to   = azurerm_storage_blob.tbot_binary
-}
 
 resource "random_string" "suffix" {
   length  = 4
@@ -26,9 +10,6 @@ resource "random_string" "suffix" {
 locals {
   name_suffix               = random_string.suffix.result
   rg_name                   = "${var.prefix}-rg-${local.name_suffix}"
-  bot_name                  = "azure-app-registration"
-  bot_role_name             = "azure-app-registration-issuer"
-  bot_token_name            = "azure-app-registration-bot"
   workload_identity_name    = "azure-app-registration"
   workload_identity_path    = "/svc/azure-app-registration"
   workload_identity_issuer  = "https://${trimsuffix(var.teleport_proxy_address, ":443")}/workload-identity"
@@ -38,21 +19,6 @@ locals {
 resource "azurerm_resource_group" "this" {
   name     = local.rg_name
   location = var.location
-}
-
-# This UAMI authenticates the VM to Teleport's Azure delegated join method and
-# downloads tbot. It is not the identity used by the test workload.
-resource "azurerm_user_assigned_identity" "teleport" {
-  name                = var.prefix
-  location            = azurerm_resource_group.this.location
-  resource_group_name = azurerm_resource_group.this.name
-}
-
-# Azure delegated joining requires permission to inspect the VM.
-resource "azurerm_role_assignment" "tbot_vm_reader" {
-  scope                = azurerm_resource_group.this.id
-  role_definition_name = "Reader"
-  principal_id         = azurerm_user_assigned_identity.teleport.principal_id
 }
 
 resource "azuread_application" "workload" {
@@ -89,28 +55,6 @@ resource "azurerm_storage_container" "test" {
   name                  = "teleport-test"
   storage_account_name  = azurerm_storage_account.test.name
   container_access_type = "private"
-}
-
-resource "azurerm_storage_container" "tbot_binary" {
-  name                  = "teleport-binary"
-  storage_account_name  = azurerm_storage_account.test.name
-  container_access_type = "private"
-}
-
-resource "azurerm_storage_blob" "tbot_binary" {
-  name                   = var.tbot_binary_blob_name
-  storage_account_name   = azurerm_storage_account.test.name
-  storage_container_name = azurerm_storage_container.tbot_binary.name
-  type                   = "Block"
-  source                 = pathexpand(var.tbot_binary_path)
-}
-
-# Bootstrap can read the binary, but it cannot access the workload test data.
-resource "azurerm_role_assignment" "tbot_binary_reader" {
-  scope                            = azurerm_storage_account.test.id
-  role_definition_name             = "Storage Blob Data Reader"
-  principal_id                     = azurerm_user_assigned_identity.teleport.principal_id
-  skip_service_principal_aad_check = true
 }
 
 # Only the App Registration service principal can modify the test container.
@@ -183,77 +127,32 @@ locals {
   cloud_init = <<-CLOUDINIT
     #cloud-config
     write_files:
-      - path: /etc/tbot.yaml
-        permissions: '0600'
-        content: |
-          version: v2
-          proxy_server: ${var.teleport_proxy_address}
-          onboarding:
-            join_method: azure
-            token: ${local.bot_token_name}
-            azure:
-              client_id: ${azurerm_user_assigned_identity.teleport.client_id}
-          storage:
-            type: memory
-          services:
-            - type: workload-identity-jwt
-              destination:
-                type: directory
-                path: /opt/workload-identity
-              selector:
-                name: ${local.workload_identity_name}
-              audiences:
-                - api://AzureADTokenExchange
-      - path: /etc/systemd/system/tbot.service
-        permissions: '0644'
-        content: |
-          [Unit]
-          Description=Teleport Machine and Workload Identity
-          After=network-online.target
-          Wants=network-online.target
-
-          [Service]
-          Type=simple
-          Restart=on-failure
-          RestartSec=5
-          ExecStart=/usr/local/bin/tbot start -c /etc/tbot.yaml
-          ExecReload=/bin/kill -HUP $MAINPID
-          LimitNOFILE=8192
-
-          [Install]
-          WantedBy=multi-user.target
       - path: /usr/local/bin/test-workload-identity
         permissions: '0755'
         content: |
           #!/usr/bin/env bash
           set -euo pipefail
 
-          jwt_path=/opt/workload-identity/jwt_svid
-          for attempt in $(seq 1 60); do
-            test -s "$jwt_path" && break
-            echo "waiting for JWT SVID ($attempt/60)"
-            sleep 2
-          done
+          jwt_dir=$(mktemp -d)
+          export AZURE_CONFIG_DIR
+          AZURE_CONFIG_DIR=$(mktemp -d)
+          source_file=$(mktemp)
+          downloaded_file=$(mktemp)
+          trap 'rm -rf "$jwt_dir" "$AZURE_CONFIG_DIR"; rm -f "$source_file" "$downloaded_file"' EXIT
+
+          tsh \
+            --proxy="${var.teleport_proxy_address}" \
+            --user="${var.teleport_user}" \
+            --headless \
+            workload-identity issue-jwt \
+            --name-selector="${local.workload_identity_name}" \
+            --audience=api://AzureADTokenExchange \
+            --credential-ttl=5m \
+            --output="$jwt_dir"
+
+          jwt_path="$jwt_dir/jwt_svid"
           test -s "$jwt_path"
 
-          python3 - "$jwt_path" "${local.workload_identity_issuer}" "${local.workload_identity_subject}" <<'PY'
-          import base64
-          import json
-          import sys
-
-          token = open(sys.argv[1], encoding="utf-8").read().strip()
-          payload = token.split(".")[1]
-          payload += "=" * (-len(payload) % 4)
-          claims = json.loads(base64.urlsafe_b64decode(payload))
-          assert claims["iss"] == sys.argv[2], claims
-          assert claims["sub"] == sys.argv[3], claims
-          audience = claims["aud"]
-          assert audience == "api://AzureADTokenExchange" or "api://AzureADTokenExchange" in audience, claims
-          print(json.dumps({key: claims[key] for key in ("iss", "sub", "aud", "exp")}, indent=2))
-          PY
-
-          export AZURE_CONFIG_DIR=/tmp/azure-app-registration-poc
-          rm -rf "$AZURE_CONFIG_DIR"
           token=$(cat "$jwt_path")
           az login \
             --service-principal \
@@ -265,10 +164,7 @@ locals {
 
           az account show --query '{name:name,user:user}' --output json
 
-          blob_name="tbot-poc-$(date +%s).txt"
-          source_file=$(mktemp)
-          downloaded_file=$(mktemp)
-          trap 'rm -f "$source_file" "$downloaded_file"' EXIT
+          blob_name="tsh-poc-$(date +%s).txt"
           printf 'authenticated as App Registration %s\n' "${azuread_application.workload.client_id}" > "$source_file"
 
           az storage blob upload \
@@ -298,30 +194,6 @@ locals {
           echo "App Registration workload identity exchange succeeded."
     runcmd:
       - curl -sL https://aka.ms/InstallAzureCLIDeb | bash
-      - az login --identity --client-id "${azurerm_user_assigned_identity.teleport.client_id}" --allow-no-subscriptions
-      - |
-        set -eu
-        i=1
-        while [ "$i" -le 30 ]; do
-          az storage blob download \
-            --account-name "${azurerm_storage_account.test.name}" \
-            --container-name "${azurerm_storage_container.tbot_binary.name}" \
-            --name "${azurerm_storage_blob.tbot_binary.name}" \
-            --file /usr/local/bin/tbot \
-            --auth-mode login \
-            --overwrite && \
-          chmod 0755 /usr/local/bin/tbot && \
-          break
-
-          echo "waiting for tbot binary blob ($i/30)"
-          sleep 10
-          i=$((i + 1))
-        done
-
-        test -x /usr/local/bin/tbot
-      - systemctl daemon-reload
-      - systemctl enable tbot
-      - systemctl restart tbot
   CLOUDINIT
 }
 
@@ -352,16 +224,5 @@ resource "azurerm_linux_virtual_machine" "this" {
     version   = "latest"
   }
 
-  identity {
-    type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.teleport.id]
-  }
-
   custom_data = base64encode(local.cloud_init)
-
-  depends_on = [
-    azurerm_role_assignment.tbot_vm_reader,
-    azurerm_role_assignment.tbot_binary_reader,
-    azurerm_storage_blob.tbot_binary,
-  ]
 }

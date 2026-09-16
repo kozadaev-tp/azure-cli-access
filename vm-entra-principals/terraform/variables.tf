@@ -11,7 +11,7 @@ variable "prefix" {
 }
 
 variable "vm_size" {
-  description = "Azure VM SKU for the tbot host."
+  description = "Azure VM SKU for the tsh test host."
   type        = string
   default     = "Standard_B2s"
 }
@@ -29,7 +29,7 @@ variable "admin_ssh_public_key_path" {
 }
 
 variable "teleport_proxy_address" {
-  description = "Teleport proxy address, e.g. teleport.example.com:443. Used in the cloud-init bootstrap."
+  description = "Teleport proxy address, e.g. teleport.example.com:443."
   type        = string
 }
 
@@ -38,13 +38,12 @@ variable "teleport_cluster_name" {
   type        = string
 }
 
-variable "tbot_binary_path" {
-  description = "Local path to the Linux tbot binary uploaded to Blob Storage and run on the VM. Relative paths are resolved from the terraform directory."
+variable "teleport_user" {
+  description = "Teleport user that approves the headless tsh request and has the Workload Identity issuer role."
   type        = string
 }
 
-variable "tbot_binary_blob_name" {
-  description = "Blob name used for the uploaded tbot binary."
+variable "tsh_binary_path" {
+  description = "Local path to the Linux AMD64 tsh binary uploaded to the VM by the Makefile. Relative paths are resolved from the terraform directory."
   type        = string
-  default     = "tbot"
 }

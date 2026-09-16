@@ -1,26 +1,26 @@
 output "resource_group_name" {
-  description = "Resource group containing the tbot VM and test resources."
+  description = "Resource group containing the tsh VM and test resources."
   value       = azurerm_resource_group.this.name
 }
 
 output "vm_name" {
-  description = "Name of the Linux VM running tbot."
+  description = "Name of the Linux VM used for the tsh test."
   value       = azurerm_linux_virtual_machine.this.name
 }
 
 output "vm_public_ip" {
-  description = "Public IP of the tbot VM."
+  description = "Public IP of the tsh VM."
   value       = azurerm_public_ip.this.ip_address
 }
 
 output "ssh_command" {
-  description = "SSH command for connecting to the tbot VM."
-  value       = "ssh -i ../id_rsa_azure ${var.admin_username}@${azurerm_public_ip.this.ip_address}"
+  description = "SSH command for connecting to the tsh VM from the project directory."
+  value       = "ssh -i id_rsa_azure ${var.admin_username}@${azurerm_public_ip.this.ip_address}"
 }
 
-output "tbot_join_identity_client_id" {
-  description = "Client ID of the UAMI used by tbot for Azure delegated joining."
-  value       = azurerm_user_assigned_identity.teleport.client_id
+output "vm_admin_username" {
+  description = "Administrative username for the tsh VM."
+  value       = var.admin_username
 }
 
 output "application_client_id" {
@@ -64,6 +64,6 @@ output "storage_container_name" {
 }
 
 output "test_command" {
-  description = "Command that runs the workload identity exchange test on the VM."
-  value       = "ssh -i ../id_rsa_azure ${var.admin_username}@${azurerm_public_ip.this.ip_address} sudo /usr/local/bin/test-workload-identity"
+  description = "Interactive command that runs the workload identity exchange test on the VM."
+  value       = "ssh -tt -i id_rsa_azure ${var.admin_username}@${azurerm_public_ip.this.ip_address} /usr/local/bin/test-workload-identity"
 }
